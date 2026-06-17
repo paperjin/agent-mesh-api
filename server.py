@@ -126,7 +126,7 @@ async def send_raven(req: SendRequest):
     )
 
     if req.wait_for_response:
-        # Subscribe to a unique inbox subject before publishing
+        # Subscribe to both a unique inbox AND the original reply_to subject
         inbox = f"_INBOX.{msg_id}"
         message.reply_to = inbox
 
@@ -136,13 +136,17 @@ async def send_raven(req: SendRequest):
             try:
                 data = json.loads(raw_msg.data.decode())
                 response_msg = MeshMessage.from_json(data)
-                if response_msg.reply_to == msg_id or response_msg.id == msg_id:
-                    if not response_future.done():
-                        response_future.set_result(response_msg)
+                if not response_future.done():
+                    response_future.set_result(response_msg)
             except Exception:
                 pass
 
-        sub = await mesh_client.nc.subscribe(inbox, cb=_on_response)
+        subs = []
+        sub1 = await mesh_client.nc.subscribe(inbox, cb=_on_response)
+        subs.append(sub1)
+        if req.reply_to:
+            sub2 = await mesh_client.nc.subscribe(req.reply_to, cb=_on_response)
+            subs.append(sub2)
 
         await mesh_client.publish(message)
         logger.info(
@@ -167,7 +171,8 @@ async def send_raven(req: SendRequest):
             )
             return SendResponse(status="sent_no_response", id=msg_id, subject=subject)
         finally:
-            await sub.unsubscribe()
+            for sub in subs:
+                await sub.unsubscribe()
 
     await mesh_client.publish(message)
     logger.info("Raven %s sent: %s -> %s (%s)", msg_id, req.sender, subject, req.msg_type)
