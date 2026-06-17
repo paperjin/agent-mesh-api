@@ -67,6 +67,22 @@ async def lifespan(app: FastAPI):
     mesh_client = AgentMeshClient("mesh-api", nats_url=NATS_URL)
     await mesh_client.connect()
     logger.info("Mesh API server started — connected to NATS at %s", NATS_URL)
+
+    # Subscribe to response subjects so the polling endpoint works
+    async def _save_response(raw_msg):
+        try:
+            data = json.loads(raw_msg.data.decode())
+            msg = MeshMessage.from_json(data)
+            INBOX_DIR.mkdir(parents=True, exist_ok=True)
+            filepath = INBOX_DIR / f"{msg.id}.json"
+            filepath.write_text(json.dumps(msg.to_json(), indent=2))
+            logger.info("Saved response %s to inbox", msg.id)
+        except Exception as e:
+            logger.error("Error saving response: %s", e)
+
+    await mesh_client.nc.subscribe("agent.*.response", cb=_save_response)
+    logger.info("Subscribed to agent.*.response for inbox persistence")
+
     yield
     if mesh_client:
         await mesh_client.disconnect()
