@@ -204,7 +204,9 @@ async def get_response(request_id: str):
         if f.suffix == ".json":
             try:
                 data = json.loads(f.read_text())
-                if data.get("reply_to") == request_id:
+                payload = data.get("payload", {})
+                if (data.get("reply_to") == request_id or
+                    payload.get("request_id") == request_id):
                     return {"response": data}
             except Exception:
                 continue
