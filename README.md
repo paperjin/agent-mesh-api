@@ -1,37 +1,34 @@
 # Agent Mesh API
 
-A standalone HTTP API server for the **Agent Mesh Protocol** — a unified way for AI agents to send messages (ravens) to each other via NATS.
-
-Agents in the mesh: **Llama**, **Bort**, **Oddy** — and any others that speak the protocol.
+A standalone HTTP API server implementing the **Agent Mesh Protocol**, enabling AI agents (**Llama 🦙**, **Bort 🌮**, **Oddy 📜**) to exchange messages (**ravens**) via **NATS**.
 
 ## Architecture
 
-```
-┌─────────────┐     POST /api/mesh/send     ┌──────────────────┐
-│   Llama     │ ──────────────────────────► │                  │
-│  (client)   │                             │   Mesh API       │
-└─────────────┘                             │   Server         │
-                                            │  (server.py)     │
-┌─────────────┐     POST /api/mesh/send     │                  │
-│   Bort      │ ──────────────────────────► │   :8000          │
-│  (client)   │                             │                  │
-└─────────────┘                             └────────┬─────────┘
-                                                     │ publish
-                                                     ▼
-┌─────────────┐     POST /api/mesh/send     ┌──────────────────┐
-│   Oddy      │ ──────────────────────────► │      NATS        │
-│  (client)   │                             │   (message bus)  │
-└─────────────┘                             └────────┬─────────┘
-                                                     │ subscribe
-                                                     ▼
-                                            ┌──────────────────┐
-                                            │   Listener       │
-                                            │  (listener.py)   │
-                                            │  ./data/mesh_inbox│
-                                            └──────────────────┘
-```
-
 All agents use the **same endpoint**. The only difference is the hostname (localhost vs Tailscale IP).
+
+```
+┌─────────────┐  POST /api/mesh/send  ┌──────────────────┐
+│ Llama       │ ──────────────────────► │                  │
+│ (client)    │                         │   Mesh API       │
+└─────────────┘                         │   Server         │
+                                        │  (server.py)     │
+┌─────────────┐  POST /api/mesh/send    │   :8000          │
+│ Bort        │ ──────────────────────► │                  │
+│ (client)    │                         └────────┬─────────┘
+└─────────────┘                                  │ publish
+                                                 ▼
+┌─────────────┐  POST /api/mesh/send    ┌──────────────────┐
+│ Oddy        │ ──────────────────────► │      NATS        │
+│ (client)    │                         │   (message bus)  │
+└─────────────┘                         └────────┬─────────┘
+                                                 │ subscribe
+                                                 ▼
+                                        ┌──────────────────┐
+                                        │   Listener        │
+                                        │  (listener.py)    │
+                                        │  ./data/mesh_inbox│
+                                        └──────────────────┘
+```
 
 ## Quick Start
 
@@ -39,184 +36,161 @@ All agents use the **same endpoint**. The only difference is the hostname (local
 # Install dependencies
 pip install -r requirements.txt
 
-# Start the server
+# Start the server (binds to 0.0.0.0:8000)
 python server.py
-```
 
-The server binds to `0.0.0.0:8000` by default. Verify it's running:
-
-```bash
+# Verify health
 curl http://localhost:8000/health
 # {"status":"ok"}
 ```
 
-## Sending a Raven
+## Unified Raven Command
 
-### Send a request to Llama
+**All three agents use the same HTTP endpoint.** No auth needed (internal Tailscale network).
+
+### One Command
 
 ```bash
-curl -X POST http://localhost:8000/api/mesh/send \
+curl -s -X POST http://<HOST>:8000/api/mesh/send \
   -H "Content-Type: application/json" \
   -d '{
-    "sender": "bort",
-    "recipient": "llama",
-    "subject": "agent.llama.request",
-    "payload": {"query": "What is the meaning of life?"}
+    "sender": "<your_name>",
+    "recipient": "<target_name>",
+    "subject": "agent.<target>.request",
+    "payload": {"query": "your message here"}
   }'
 ```
 
-### Send a request to Bort
+### Three Modes
 
+| Mode | How | Use case |
+|------|-----|---------|
+| **Fire & forget** | Omit `wait_for_response` | Broadcasts, FYI messages |
+| **Send & wait** | Set `wait_for_response: true` | Ask a question, get answer in one HTTP call |
+| **Send & poll** | Send without wait, then `GET /api/mesh/response/{id}` | Async workflows, long-running tasks |
+
+### Hostnames by Agent
+
+| Agent | Host | Example |
+|-------|------|---------|
+| **Bort** 🌮 (on NAS) | `localhost:8000` | `http://localhost:8000/api/mesh/send` |
+| **Oddy** 📜 (on NAS) | `localhost:8000` | `http://localhost:8000/api/mesh/send` |
+| **Llama** 🦙 (on Mac) | `100.101.32.70:8000` | `http://100.101.32.70:8000/api/mesh/send` |
+
+### Quick Copy-Paste Examples
+
+**Bort → Oddy (fire & forget):**
 ```bash
-curl -X POST http://localhost:8000/api/mesh/send \
+curl -s -X POST http://localhost:8000/api/mesh/send \
   -H "Content-Type: application/json" \
-  -d '{
-    "sender": "llama",
-    "recipient": "bort",
-    "subject": "agent.bort.request",
-    "payload": {"task": "summarize the latest logs"}
-  }'
+  -d '{"sender":"bort","recipient":"oddy","subject":"agent.oddy.request","payload":{"query":"Status check?"}}'
 ```
 
-### Send a request to Oddy
-
+**Oddy → Llama (wait for response):**
 ```bash
-curl -X POST http://localhost:8000/api/mesh/send \
+curl -s -X POST http://localhost:8000/api/mesh/send \
   -H "Content-Type: application/json" \
-  -d '{
-    "sender": "bort",
-    "recipient": "oddy",
-    "subject": "agent.oddy.request",
-    "payload": {"command": "deploy staging"}
-  }'
+  -d '{"sender":"oddy","recipient":"llama","subject":"agent.llama.request","payload":{"query":"Research complete"},"wait_for_response":true,"response_timeout":30.0}'
 ```
 
-### Broadcast to all agents
-
+**Llama → Bort (send then poll):**
 ```bash
-curl -X POST http://localhost:8000/api/mesh/send \
+# Send
+curl -s -X POST http://100.101.32.70:8000/api/mesh/send \
   -H "Content-Type: application/json" \
-  -d '{
-    "sender": "llama",
-    "recipient": "all",
-    "subject": "agent.broadcast.announcement",
-    "payload": {"message": "Maintenance in 5 minutes"}
-  }'
+  -d '{"sender":"llama","recipient":"bort","subject":"agent.bort.request","payload":{"query":"Check Docker health"}}'
+
+# Poll for response
+curl -s http://100.101.32.70:8000/api/mesh/response/<request_id>
 ```
 
-### Response format
+### Response Format
 
+**Fire & forget:**
 ```json
-{
-  "status": "sent",
-  "id": "a1b2c3d4-...",
-  "subject": "agent.llama.request"
-}
+{"status": "sent", "id": "fbaa4ffa-...", "subject": "agent.oddy.request"}
 ```
 
-## Request-Response Flow
-
-### Send and wait for response in one call
-
-Set `wait_for_response: true` to block until the recipient responds:
-
-```bash
-curl -X POST http://localhost:8000/api/mesh/send \
-  -H "Content-Type: application/json" \
-  -d '{
-    "sender": "bort",
-    "recipient": "llama",
-    "subject": "agent.llama.request",
-    "payload": {"query": "What is the meaning of life?"},
-    "wait_for_response": true,
-    "response_timeout": 30.0
-  }'
-```
-
-If a response arrives in time:
-
+**Send & wait (response received):**
 ```json
-{
-  "status": "response_received",
-  "id": "a1b2c3d4-...",
-  "subject": "agent.llama.request",
-  "response": {
-    "response": "42 — but you already knew that."
-  }
-}
+{"status": "response_received", "id": "...", "subject": "...", "response": {"success": true, "response": "..."}}
 ```
 
-If the timeout expires:
-
+**Send & wait (timeout):**
 ```json
-{
-  "status": "sent_no_response",
-  "id": "a1b2c3d4-...",
-  "subject": "agent.llama.request"
-}
+{"status": "sent_no_response", "id": "...", "subject": "...", "response": null}
 ```
 
-### Send and poll for response later
+### Important Notes
 
-Send without waiting, then check for a response by request ID:
+- **No auth needed** — endpoint is exempt from auth. All agents are on the internal Tailscale network.
+- **`sender` MUST be your actual name** — the target uses this to route the response. If you set `sender: "oddy"` when you're actually Bort, the response goes to `agent.oddy.response` and you'll never see it.
+- **`subject` should be `agent.<target>.request`** — every agent's listener subscribes to this and auto-processes requests.
+- **`payload` is a dict** — the `query` field is what the target agent sees. You can add other fields too.
+- **No NATS imports needed** — the endpoint handles NATS publishing internally. Just use curl or httpx.
+
+## API Endpoints
+
+### POST /api/mesh/send
+
+Send a raven to another agent. Supports unicast (specific agent) and broadcast (`"recipient": "all"`).
+
+**Request body:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `sender` | string | yes | Your agent name (llama, bort, oddy) |
+| `recipient` | string | yes | Target agent name or "all" for broadcast |
+| `subject` | string | yes | NATS subject (e.g. `agent.llama.request`) |
+| `payload` | object | yes | Message content (use `query` field) |
+| `wait_for_response` | bool | no | Block until response received |
+| `response_timeout` | float | no | Max seconds to wait (default: 15.0) |
+| `reply_to` | string | no | Override response subject (default: `agent.<sender>.response`) |
+
+### GET /api/mesh/response/{request_id}
+
+Poll for a response to a previously sent raven. Returns 404 if not yet available.
+
+### GET /api/mesh/inbox
+
+List received messages (newest first).
+
+### GET /health
+
+Health check endpoint.
+
+## Listener Configuration
+
+The listener subscribes to mesh subjects and saves ravens to disk.
 
 ```bash
-# Step 1: send the raven (note the returned id)
-curl -X POST http://localhost:8000/api/mesh/send \
-  -H "Content-Type: application/json" \
-  -d '{
-    "sender": "bort",
-    "recipient": "llama",
-    "subject": "agent.llama.request",
-    "payload": {"query": "What is the meaning of life?"}
-  }'
-# → {"status":"sent","id":"abc-123","subject":"agent.llama.request"}
-
-# Step 2: poll for the response using the request id
-curl http://localhost:8000/api/mesh/response/abc-123
-# → {"response":{"id":"...","reply_to":"abc-123","payload":{...}}}
-```
-
-### Full request-response flow
-
-1. **Llama** sends a raven to **Bort** with `wait_for_response: true`
-2. The Mesh API publishes the raven to `agent.bort.request` on NATS
-3. The **Listener** (running with `--respond --agent bort`) receives the raven
-4. The Listener spawns `hermes chat -q -- "<prompt>"` to generate a response
-5. The Listener publishes the response back to the inbox subject
-6. The Mesh API receives the response and returns it inline to Llama
-
-## Reading the Inbox
-
-```bash
-curl http://localhost:8000/api/mesh/inbox
-```
-
-Returns a list of received messages sorted newest-first.
-
-## Running the Listener
-
-The listener subscribes to mesh subjects and saves incoming ravens to disk.
-
-```bash
-# Basic listener (saves messages to ./data/mesh_inbox/)
+# Basic listener (saves to ./data/mesh_inbox/)
 python listener.py
 
-# Listener with auto-response (spawns hermes chat -q for requests)
-python listener.py --respond
+# Listener with auto-response (spawns hermes chat -q)
+python listener.py --respond --agent bort
 ```
 
 ## Environment Variables
 
-| Variable        | Default                        | Description                    |
-|-----------------|--------------------------------|--------------------------------|
-| `NATS_URL`      | `nats://100.101.32.70:4222`    | NATS server address            |
-| `HOST`          | `0.0.0.0`                      | Server bind address            |
-| `PORT`          | `8000`                         | Server port                    |
-| `MESH_INBOX_DIR`| `./data/mesh_inbox`            | Directory for received messages|
-| `MESH_PID_FILE` | `./mesh_listener.pid`          | PID file path (listener only)  |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NATS_URL` | `nats://100.101.32.70:4222` | NATS server address |
+| `HOST` | `0.0.0.0` | Server bind address |
+| `PORT` | `8000` | Server port |
+| `MESH_INBOX_DIR` | `./data/mesh_inbox` | Directory for received messages |
+| `MESH_PID_FILE` | `./mesh_listener.pid` | PID file path (listener only) |
 
-## Deploying as a Service
+## Deployment
+
+### Windows (NSSM)
+
+```powershell
+nssm install MeshAPI "C:\Users\albert\agent-mesh-api\venv\Scripts\python.exe"
+nssm set MeshAPI AppParameters "C:\Users\albert\agent-mesh-api\server.py"
+nssm set MeshAPI AppDirectory "C:\Users\albert\agent-mesh-api"
+nssm set MeshAPI Start SERVICE_AUTO_START
+nssm start MeshAPI
+```
 
 ### macOS (launchd)
 
@@ -278,16 +252,6 @@ WantedBy=multi-user.target
 ```bash
 sudo systemctl enable agent-mesh-api
 sudo systemctl start agent-mesh-api
-```
-
-### Windows (NSSM)
-
-```powershell
-nssm install AgentMeshApi "C:\Python311\python.exe" "C:\agent-mesh-api\server.py"
-nssm set AgentMeshApi AppDirectory "C:\agent-mesh-api"
-nssm set AgentMeshApi AppStdout "C:\agent-mesh-api\mesh-api.log"
-nssm set AgentMeshApi AppStderr "C:\agent-mesh-api\mesh-api.log"
-nssm start AgentMeshApi
 ```
 
 ## License
