@@ -94,9 +94,9 @@ class MeshListener:
         """Spawn hermes chat to respond to a request message."""
         logger.info("Spawning hermes for raven %s", msg.id)
         try:
-            prompt = msg.payload.get("query") or msg.payload.get("task") or json.dumps(msg.payload)
+            query_text = msg.payload.get("query") or msg.payload.get("message") or json.dumps(msg.payload)
             proc = await asyncio.create_subprocess_exec(
-                "hermes", "chat", "-q", "--", prompt,
+                "hermes", "chat", "-q", query_text,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env={**os.environ, "PYTHONIOENCODING": "utf-8"},
