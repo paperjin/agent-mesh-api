@@ -37,9 +37,10 @@ logger = logging.getLogger("mesh_listener")
 class MeshListener:
     """Listens for mesh messages and saves them to the inbox directory."""
 
-    def __init__(self, respond: bool = False):
+    def __init__(self, respond: bool = False, agent: Optional[str] = None):
         self.respond = respond
-        self.client = AgentMeshClient("mesh-listener", nats_url=NATS_URL)
+        self.agent = agent or "mesh-listener"
+        self.client = AgentMeshClient(self.agent, nats_url=NATS_URL)
         self._running = False
 
     async def start(self) -> None:
@@ -93,14 +94,14 @@ class MeshListener:
         """Spawn hermes chat to respond to a request message."""
         logger.info("Spawning hermes for raven %s", msg.id)
         try:
+            prompt = msg.payload.get("query") or msg.payload.get("task") or json.dumps(msg.payload)
             proc = await asyncio.create_subprocess_exec(
-                "hermes", "chat", "-q",
-                stdin=subprocess.PIPE,
+                "hermes", "chat", "-q", "--", prompt,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
             )
-            input_text = json.dumps(msg.payload, indent=2)
-            stdout, stderr = await proc.communicate(input_text.encode(), timeout=60)
+            stdout, stderr = await proc.communicate(timeout=60)
 
             if proc.returncode != 0:
                 logger.error("hermes failed for %s: %s", msg.id, stderr.decode())
@@ -109,7 +110,7 @@ class MeshListener:
             response_payload = {"response": stdout.decode().strip()}
             reply = MeshMessage(
                 id=str(uuid.uuid4()),
-                sender="mesh-listener",
+                sender=self.agent,
                 type="response",
                 subject=msg.reply_to or f"agent.{msg.sender}.response",
                 payload=response_payload,
@@ -135,9 +136,14 @@ def main():
         action="store_true",
         help="Spawn hermes chat to respond to request messages",
     )
+    parser.add_argument(
+        "--agent",
+        choices=["llama", "bort", "oddy"],
+        help="Agent name to use as sender in responses",
+    )
     args = parser.parse_args()
 
-    listener = MeshListener(respond=args.respond)
+    listener = MeshListener(respond=args.respond, agent=args.agent)
     try:
         asyncio.run(listener.start())
     except KeyboardInterrupt:

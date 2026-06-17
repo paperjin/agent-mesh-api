@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ from typing import Any, Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from agent_mesh import AgentMeshClient, MeshMessage
@@ -41,12 +43,15 @@ class SendRequest(BaseModel):
     payload: dict[str, Any]
     msg_type: str = "request"
     reply_to: Optional[str] = None
+    wait_for_response: bool = False
+    response_timeout: float = 30.0
 
 
 class SendResponse(BaseModel):
     status: str
     id: str
     subject: str
+    response: Optional[dict] = None
 
 
 # ── Globals ──────────────────────────────────────────────────────────────────
@@ -77,6 +82,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS — allow all origins (internal API on Tailscale)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
@@ -87,6 +101,11 @@ async def health():
 
 @app.post("/api/mesh/send", response_model=SendResponse)
 async def send_raven(req: SendRequest):
+    """
+    Send a raven to an agent on the mesh.
+
+    Note: This endpoint is designed for internal networks (Tailscale) and has no auth.
+    """
     if not mesh_client:
         raise HTTPException(status_code=503, detail="NATS not connected")
 
@@ -106,9 +125,69 @@ async def send_raven(req: SendRequest):
         reply_to=req.reply_to,
     )
 
+    if req.wait_for_response:
+        # Subscribe to a unique inbox subject before publishing
+        inbox = f"_INBOX.{msg_id}"
+        message.reply_to = inbox
+
+        response_future = asyncio.get_event_loop().create_future()
+
+        async def _on_response(raw_msg) -> None:
+            try:
+                data = json.loads(raw_msg.data.decode())
+                response_msg = MeshMessage.from_json(data)
+                if response_msg.reply_to == msg_id or response_msg.id == msg_id:
+                    if not response_future.done():
+                        response_future.set_result(response_msg)
+            except Exception:
+                pass
+
+        sub = await mesh_client.nc.subscribe(inbox, cb=_on_response)
+
+        await mesh_client.publish(message)
+        logger.info(
+            "Raven %s sent (waiting for response): %s -> %s (%s)",
+            msg_id, req.sender, subject, req.msg_type,
+        )
+
+        try:
+            response = await asyncio.wait_for(
+                response_future, timeout=req.response_timeout,
+            )
+            return SendResponse(
+                status="response_received",
+                id=msg_id,
+                subject=subject,
+                response=response.payload,
+            )
+        except asyncio.TimeoutError:
+            logger.info(
+                "Raven %s sent but no response received within %.1fs",
+                msg_id, req.response_timeout,
+            )
+            return SendResponse(status="sent_no_response", id=msg_id, subject=subject)
+        finally:
+            await sub.unsubscribe()
+
     await mesh_client.publish(message)
     logger.info("Raven %s sent: %s -> %s (%s)", msg_id, req.sender, subject, req.msg_type)
     return SendResponse(status="sent", id=msg_id, subject=subject)
+
+
+@app.get("/api/mesh/response/{request_id}")
+async def get_response(request_id: str):
+    """Check the inbox for a response matching a specific request ID."""
+    if not INBOX_DIR.exists():
+        raise HTTPException(status_code=404, detail="No response found")
+    for f in INBOX_DIR.iterdir():
+        if f.suffix == ".json":
+            try:
+                data = json.loads(f.read_text())
+                if data.get("reply_to") == request_id:
+                    return {"response": data}
+            except Exception:
+                continue
+    raise HTTPException(status_code=404, detail="No response found")
 
 
 @app.get("/api/mesh/inbox")

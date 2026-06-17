@@ -114,6 +114,78 @@ curl -X POST http://localhost:8000/api/mesh/send \
 }
 ```
 
+## Request-Response Flow
+
+### Send and wait for response in one call
+
+Set `wait_for_response: true` to block until the recipient responds:
+
+```bash
+curl -X POST http://localhost:8000/api/mesh/send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sender": "bort",
+    "recipient": "llama",
+    "subject": "agent.llama.request",
+    "payload": {"query": "What is the meaning of life?"},
+    "wait_for_response": true,
+    "response_timeout": 30.0
+  }'
+```
+
+If a response arrives in time:
+
+```json
+{
+  "status": "response_received",
+  "id": "a1b2c3d4-...",
+  "subject": "agent.llama.request",
+  "response": {
+    "response": "42 — but you already knew that."
+  }
+}
+```
+
+If the timeout expires:
+
+```json
+{
+  "status": "sent_no_response",
+  "id": "a1b2c3d4-...",
+  "subject": "agent.llama.request"
+}
+```
+
+### Send and poll for response later
+
+Send without waiting, then check for a response by request ID:
+
+```bash
+# Step 1: send the raven (note the returned id)
+curl -X POST http://localhost:8000/api/mesh/send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sender": "bort",
+    "recipient": "llama",
+    "subject": "agent.llama.request",
+    "payload": {"query": "What is the meaning of life?"}
+  }'
+# → {"status":"sent","id":"abc-123","subject":"agent.llama.request"}
+
+# Step 2: poll for the response using the request id
+curl http://localhost:8000/api/mesh/response/abc-123
+# → {"response":{"id":"...","reply_to":"abc-123","payload":{...}}}
+```
+
+### Full request-response flow
+
+1. **Llama** sends a raven to **Bort** with `wait_for_response: true`
+2. The Mesh API publishes the raven to `agent.bort.request` on NATS
+3. The **Listener** (running with `--respond --agent bort`) receives the raven
+4. The Listener spawns `hermes chat -q -- "<prompt>"` to generate a response
+5. The Listener publishes the response back to the inbox subject
+6. The Mesh API receives the response and returns it inline to Llama
+
 ## Reading the Inbox
 
 ```bash
