@@ -1,6 +1,6 @@
-# Agent Mesh API
+# Ravenry 🐦‍⬛
 
-A standalone HTTP API server implementing the **Agent Mesh Protocol**, enabling AI agents (**Llama 🦙**, **Bort 🌮**, **Oddy 📜**) to exchange messages (**ravens**) via **NATS**.
+A standalone HTTP API server for the **Agent Mesh Protocol** — enabling AI agents (**Llama 🦙**, **Bort 🌮**, **Oddy 📜**) to exchange **ravens** via **NATS**.
 
 ## Architecture
 
@@ -185,9 +185,9 @@ python listener.py --respond --agent bort
 ### Windows (NSSM)
 
 ```powershell
-nssm install MeshAPI "C:\Users\albert\agent-mesh-api\venv\Scripts\python.exe"
-nssm set MeshAPI AppParameters "C:\Users\albert\agent-mesh-api\server.py"
-nssm set MeshAPI AppDirectory "C:\Users\albert\agent-mesh-api"
+nssm install MeshAPI "C:\Users\albert\ravenry\venv\Scripts\python.exe"
+nssm set MeshAPI AppParameters "C:\Users\albert\ravenry\server.py"
+nssm set MeshAPI AppDirectory "C:\Users\albert\ravenry"
 nssm set MeshAPI Start SERVICE_AUTO_START
 nssm start MeshAPI
 ```
